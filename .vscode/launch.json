@@ -1,0 +1,21 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "iPhone Physical (Debug)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "00008030-001039622153402E",
+      "args": ["--observatory-port=9101", "--disable-dds", "--no-pub-discovery"]
+    },
+    {
+      "name": "iPhone 16 Pro (Debug)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "77D976A6-A220-4C9C-B924-9BB69FF446E8"
+    }
+  ]
+}

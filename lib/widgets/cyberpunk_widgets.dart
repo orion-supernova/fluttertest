@@ -1,161 +1,153 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-class CyberpunkTextField extends StatelessWidget {
+class CyberpunkTextField extends StatefulWidget {
   final String label;
-  final ValueChanged<String> onChanged;
+  final String? value;
+  final bool readOnly;
+  final Function(String)? onChanged;
   final String? Function(String?)? validator;
   final IconData? icon;
-  final String? initialValue;
-  final Widget? suffix;
-  final bool readOnly;
 
   const CyberpunkTextField({
+    super.key,
     required this.label,
-    required this.onChanged,
+    this.value,
+    this.readOnly = false,
+    this.onChanged,
     this.validator,
     this.icon,
-    this.initialValue,
-    this.suffix,
-    this.readOnly = false,
-    super.key,
   });
 
   @override
+  State<CyberpunkTextField> createState() => _CyberpunkTextFieldState();
+}
+
+class _CyberpunkTextFieldState extends State<CyberpunkTextField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.value);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 14,
-            letterSpacing: 2,
+    // Update controller text if value changes
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_controller.text != widget.value) {
+        _controller.text = widget.value ?? '';
+      }
+    });
+
+    return TextFormField(
+      controller: _controller,
+      readOnly: widget.readOnly,
+      onChanged: widget.onChanged,
+      validator: widget.validator,
+      style: const TextStyle(
+        color: Color(0xFF00FFFF),
+        letterSpacing: 2,
+      ),
+      decoration: InputDecoration(
+        labelText: widget.label,
+        labelStyle: TextStyle(
+          color: const Color(0xFF00FFFF).withOpacity(0.7),
+          letterSpacing: 2,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderSide: BorderSide(
+            color: const Color(0xFF00FFFF).withOpacity(0.3),
           ),
         ),
-        const SizedBox(height: 8),
-        TextFormField(
-          initialValue: initialValue,
-          onChanged: onChanged,
-          validator: validator,
-          readOnly: readOnly,
-          style: const TextStyle(color: Colors.white),
-          decoration: InputDecoration(
-            filled: true,
-            fillColor: Colors.black26,
-            prefixIcon: icon != null
-                ? Icon(
-                    icon,
-                    color: const Color(0xFF00FFFF),
-                    size: 20,
-                  )
-                : null,
-            suffixIcon: suffix,
-            enabledBorder: const OutlineInputBorder(
-              borderSide: BorderSide(
-                color: Color(0xFF00FFFF),
-                width: 1,
-              ),
-            ),
-            focusedBorder: const OutlineInputBorder(
-              borderSide: BorderSide(
-                color: Color(0xFFFF00FF),
-                width: 2,
-              ),
-            ),
-            errorBorder: const OutlineInputBorder(
-              borderSide: BorderSide(
-                color: Colors.red,
-                width: 1,
-              ),
-            ),
-            focusedErrorBorder: const OutlineInputBorder(
-              borderSide: BorderSide(
-                color: Colors.red,
-                width: 2,
-              ),
-            ),
+        focusedBorder: const OutlineInputBorder(
+          borderSide: BorderSide(
+            color: Color(0xFF00FFFF),
           ),
         ),
-      ],
+        errorBorder: const OutlineInputBorder(
+          borderSide: BorderSide(
+            color: Color(0xFFFF00FF),
+          ),
+        ),
+        focusedErrorBorder: const OutlineInputBorder(
+          borderSide: BorderSide(
+            color: Color(0xFFFF00FF),
+          ),
+        ),
+        prefixIcon: widget.icon != null
+            ? Icon(
+                widget.icon,
+                color: const Color(0xFF00FFFF),
+              )
+            : null,
+      ),
     );
   }
 }
 
-class CyberpunkButton extends StatefulWidget {
-  final VoidCallback onPressed;
+class CyberpunkButton extends StatelessWidget {
+  final VoidCallback? onPressed;
   final String label;
   final IconData? icon;
+  final bool isLoading;
+  final Color? color;
 
   const CyberpunkButton({
+    super.key,
     required this.onPressed,
     required this.label,
     this.icon,
-    super.key,
+    this.isLoading = false,
+    this.color,
   });
 
   @override
-  State<CyberpunkButton> createState() => _CyberpunkButtonState();
-}
-
-class _CyberpunkButtonState extends State<CyberpunkButton> {
-  bool _isPressed = false;
-  bool _isHovered = false;
-
-  @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _isPressed = true),
-        onTapUp: (_) {
-          setState(() => _isPressed = false);
-          widget.onPressed();
-          HapticFeedback.heavyImpact();
-        },
-        onTapCancel: () => setState(() => _isPressed = false),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          transform: Matrix4.identity()
-            ..scale(_isPressed
-                ? 0.95
-                : _isHovered
-                    ? 1.02
-                    : 1.0),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            decoration: BoxDecoration(
-              color: Colors.black26,
-              border: Border.all(
-                color: const Color(0xFF00FFFF),
-                width: 2,
+    final buttonColor = color ?? const Color(0xFFFF00FF);
+
+    return ElevatedButton(
+      onPressed: isLoading ? null : onPressed,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.black,
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        side: BorderSide(
+          color: buttonColor,
+          width: 2,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(0),
+        ),
+      ),
+      child: isLoading
+          ? SizedBox(
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: buttonColor,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF00FFFF).withOpacity(0.3),
-                  blurRadius: _isHovered ? 20 : 10,
-                  spreadRadius: _isHovered ? 2 : 0,
-                ),
-              ],
-            ),
-            child: Row(
+            )
+          : Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                if (widget.icon != null) ...[
+                if (icon != null) ...[
                   Icon(
-                    widget.icon,
-                    color: const Color(0xFF00FFFF),
-                    size: 20,
+                    icon,
+                    color: buttonColor,
                   ),
                   const SizedBox(width: 12),
                 ],
                 Text(
-                  widget.label,
-                  style: const TextStyle(
-                    color: Color(0xFF00FFFF),
+                  label,
+                  style: TextStyle(
+                    color: buttonColor,
                     fontSize: 16,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 2,
@@ -163,9 +155,6 @@ class _CyberpunkButtonState extends State<CyberpunkButton> {
                 ),
               ],
             ),
-          ),
-        ),
-      ),
     );
   }
 }

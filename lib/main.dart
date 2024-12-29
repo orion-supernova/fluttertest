@@ -1,14 +1,26 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
-import 'dart:ui';
 import 'dart:math';
 import 'dart:async';
 import 'package:flutter/services.dart';
 import 'screens/create_game_screen.dart';
 import 'screens/join_game_screen.dart';
+import 'services/appwrite_service.dart';
+import 'package:provider/provider.dart';
+import 'providers/user_provider.dart';
+import 'screens/loading_screen.dart';
 
-void main() {
-  runApp(const UndercoverApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  final appwrite = AppwriteService();
+  await appwrite.initialize();
+
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => UserProvider(appwrite),
+      child: const UndercoverApp(),
+    ),
+  );
 }
 
 class UndercoverApp extends StatelessWidget {
@@ -17,16 +29,43 @@ class UndercoverApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'UnderCover: A Spy\'s  or Fall',
+      title: 'UnderCover: A Spy\'s Tale',
       themeMode: ThemeMode.dark,
       darkTheme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: Colors.black,
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFFF00FF), // Neon pink
-          secondary: Color(0xFF00FFFF), // Neon cyan
+          primary: Color(0xFFFF00FF),
+          secondary: Color(0xFF00FFFF),
         ),
       ),
-      home: const HomeScreen(),
+      home: Consumer<UserProvider>(
+        builder: (context, userProvider, child) {
+          if (userProvider.error != null) {
+            return Scaffold(
+              backgroundColor: Colors.black,
+              body: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('Error initializing app'),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () => userProvider.retryInitialization(),
+                      child: const Text('RETRY'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          if (userProvider.isLoading || !userProvider.isLoggedIn) {
+            return const LoadingScreen();
+          }
+
+          return const HomeScreen();
+        },
+      ),
     );
   }
 }
@@ -139,7 +178,6 @@ class _HomeScreenState extends State<HomeScreen>
                   // Cyberpunk buttons
                   _CyberpunkButton(
                     onPressed: () {
-                      HapticFeedback.heavyImpact();
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -154,7 +192,6 @@ class _HomeScreenState extends State<HomeScreen>
                   const SizedBox(height: 16),
                   _CyberpunkButton(
                     onPressed: () {
-                      HapticFeedback.heavyImpact();
                       Navigator.push(
                         context,
                         MaterialPageRoute(

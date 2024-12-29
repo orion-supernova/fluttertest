@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import '../widgets/cyberpunk_widgets.dart';
+import 'package:flutter/services.dart';
+import '../services/appwrite_service.dart';
+import 'game_lobby_screen.dart';
 
 class JoinGameScreen extends StatefulWidget {
   const JoinGameScreen({super.key});
@@ -14,6 +16,7 @@ class _JoinGameScreenState extends State<JoinGameScreen>
   final _formKey = GlobalKey<FormState>();
   String _roomCode = '';
   late AnimationController _scanlineController;
+  bool _isLoading = false;
 
   @override
   void initState() {
@@ -84,13 +87,14 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.7),
+                          color: Colors.black.withValues(alpha: 0.7),
                           border: Border.all(
-                            color: const Color(0xFF00FFFF).withOpacity(0.5),
-                          ),
+                              color: const Color(0xFF00FFFF)
+                                  .withValues(alpha: 0.5)),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF00FFFF).withOpacity(0.2),
+                              color: const Color(0xFF00FFFF)
+                                  .withValues(alpha: 0.35),
                               blurRadius: 10,
                             ),
                           ],
@@ -101,7 +105,8 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                               shaderCallback: (bounds) => LinearGradient(
                                 colors: [
                                   const Color(0xFF00FFFF),
-                                  const Color(0xFF00FFFF).withOpacity(0.5),
+                                  const Color(0xFF00FFFF)
+                                      .withValues(alpha: 0.5),
                                 ],
                               ).createShader(bounds),
                               child: const Icon(
@@ -124,7 +129,7 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                             Text(
                               'Enter operation code to join',
                               style: TextStyle(
-                                color: Colors.white.withOpacity(0.7),
+                                color: Colors.white.withValues(alpha: 0.7),
                                 fontSize: 14,
                                 letterSpacing: 1,
                               ),
@@ -137,13 +142,15 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                       Container(
                         padding: const EdgeInsets.all(24),
                         decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.7),
+                          color: Colors.black.withValues(alpha: 0.7),
                           border: Border.all(
-                            color: const Color(0xFFFF00FF).withOpacity(0.5),
+                            color:
+                                const Color(0xFFFF00FF).withValues(alpha: 0.5),
                           ),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFFFF00FF).withOpacity(0.2),
+                              color: const Color(0xFFFF00FF)
+                                  .withValues(alpha: 0.2),
                               blurRadius: 10,
                             ),
                           ],
@@ -167,27 +174,66 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                             ),
                             const SizedBox(height: 24),
                             CyberpunkButton(
-                              onPressed: () {
-                                if (_formKey.currentState!.validate()) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Row(
-                                        children: [
-                                          CircularProgressIndicator(
-                                            color: Colors.white,
-                                            strokeWidth: 2,
-                                          ),
-                                          SizedBox(width: 16),
-                                          Text('Accessing operation...'),
-                                        ],
-                                      ),
-                                      backgroundColor: Color(0xFFFF00FF),
-                                    ),
-                                  );
-                                }
-                              },
+                              onPressed: _isLoading
+                                  ? null
+                                  : () async {
+                                      if (_formKey.currentState!.validate()) {
+                                        setState(() => _isLoading = true);
+                                        HapticFeedback.lightImpact();
+
+                                        try {
+                                          // Check if room exists
+                                          final room = await AppwriteService()
+                                              .getRoom(_roomCode);
+
+                                          if (room == null) {
+                                            if (mounted) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                      'Operation not found'),
+                                                  backgroundColor: Colors.red,
+                                                ),
+                                              );
+                                            }
+                                            return;
+                                          }
+
+                                          // Join the room
+                                          await AppwriteService()
+                                              .joinRoom(room.id);
+
+                                          if (mounted) {
+                                            await Navigator.pushReplacement(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (context) =>
+                                                    GameLobbyScreen(room: room),
+                                              ),
+                                            );
+                                          }
+                                        } catch (e) {
+                                          if (mounted) {
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              SnackBar(
+                                                content: Text(
+                                                    'Error joining operation: $e'),
+                                                backgroundColor: Colors.red,
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _isLoading = false);
+                                          }
+                                        }
+                                      }
+                                    },
                               label: 'ACCESS OPERATION',
                               icon: Icons.login,
+                              isLoading: _isLoading,
                             ),
                           ],
                         ),
