@@ -7,6 +7,7 @@ class CyberpunkTextField extends StatefulWidget {
   final Function(String)? onChanged;
   final String? Function(String?)? validator;
   final IconData? icon;
+  final TextEditingController? controller;
 
   const CyberpunkTextField({
     super.key,
@@ -16,6 +17,7 @@ class CyberpunkTextField extends StatefulWidget {
     this.onChanged,
     this.validator,
     this.icon,
+    this.controller,
   });
 
   @override
@@ -28,23 +30,29 @@ class _CyberpunkTextFieldState extends State<CyberpunkTextField> {
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.value);
+    _controller =
+        widget.controller ?? TextEditingController(text: widget.value);
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    if (widget.controller == null) {
+      // Only dispose if we created the controller
+      _controller.dispose();
+    }
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // Update controller text if value changes
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_controller.text != widget.value) {
-        _controller.text = widget.value ?? '';
-      }
-    });
+    // Only update text if we're not using a provided controller
+    if (widget.controller == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_controller.text != widget.value) {
+          _controller.text = widget.value ?? '';
+        }
+      });
+    }
 
     return TextFormField(
       controller: _controller,

@@ -92,7 +92,6 @@ class AppwriteService {
         collectionId: _roomsCollectionId,
         queries: [
           Query.equal('roomCode', roomCode),
-          Query.equal('status', 'waiting'), // Only get active rooms
         ],
       );
 
@@ -365,12 +364,23 @@ class AppwriteService {
 
   Stream<Room> subscribeToRoom(String roomId) {
     final realtime = Realtime(_client);
+    print('Subscribing to room: $roomId');
     return realtime
         .subscribe([
           'databases.$_databaseId.collections.$_roomsCollectionId.documents.$roomId'
         ])
         .stream
-        .map((event) => Room.fromJson(event.payload));
+        .map((event) {
+          if (event.events
+              .contains('databases.*.collections.*.documents.*.update')) {
+            print('Room update event received');
+            final room = Room.fromJson(event.payload);
+            print(
+                'Room status: ${room.status}, Players: ${room.playerIds.length}');
+            return room;
+          }
+          return Room.fromJson(event.payload);
+        });
   }
 
   Stream<List<User>> subscribeToRoomPlayers(String roomId) {
@@ -447,14 +457,27 @@ class AppwriteService {
   }
 
   Future<void> kickPlayerFromRoom(String roomId, String userId) async {
-    if (_userId == null) return;
+    try {
+      // Simply call leaveRoom with the userId to kick
+      await leaveRoom(roomId, userId: userId);
+      print('Successfully kicked player: $userId from room: $roomId');
+    } catch (e) {
+      print('Error kicking player: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> leaveRoom(String roomId, {String? userId}) async {
+    // Use provided userId or current user's id
+    final targetUserId = userId ?? _userId;
+    if (targetUserId == null) return;
 
     try {
       // Update user document
       final userDoc = await _databases.listDocuments(
         databaseId: _databaseId,
         collectionId: _usersCollectionId,
-        queries: [Query.equal('userId', userId)],
+        queries: [Query.equal('userId', targetUserId)],
       );
 
       if (userDoc.documents.isNotEmpty) {
@@ -469,7 +492,7 @@ class AppwriteService {
         );
       }
 
-      // Update room's player list
+      // Remove user from room's player list
       final room = await _databases.getDocument(
         databaseId: _databaseId,
         collectionId: _roomsCollectionId,
@@ -478,7 +501,7 @@ class AppwriteService {
 
       final List<String> players =
           List<String>.from(room.data['playerIds'] ?? []);
-      players.remove(userId);
+      players.remove(targetUserId);
 
       await _databases.updateDocument(
         databaseId: _databaseId,
@@ -486,8 +509,25 @@ class AppwriteService {
         documentId: roomId,
         data: {'playerIds': players},
       );
+
+      print('Successfully removed user: $targetUserId from room: $roomId');
     } catch (e) {
-      print('Error kicking player: $e');
+      print('Error removing user from room: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> updateRoomStatus(String roomId, String status) async {
+    try {
+      await _databases.updateDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+        data: {'status': status},
+      );
+      print('Room status updated to: $status');
+    } catch (e) {
+      print('Error updating room status: $e');
       rethrow;
     }
   }

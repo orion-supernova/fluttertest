@@ -3,6 +3,7 @@ import '../widgets/cyberpunk_widgets.dart';
 import 'package:flutter/services.dart';
 import '../services/appwrite_service.dart';
 import 'game_lobby_screen.dart';
+import 'game_room_screen.dart';
 
 class JoinGameScreen extends StatefulWidget {
   const JoinGameScreen({super.key});
@@ -187,16 +188,14 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                                               .getRoom(_roomCode);
 
                                           if (room == null) {
-                                            if (mounted) {
-                                              ScaffoldMessenger.of(context)
-                                                  .showSnackBar(
-                                                const SnackBar(
-                                                  content: Text(
-                                                      'Operation not found'),
-                                                  backgroundColor: Colors.red,
-                                                ),
-                                              );
-                                            }
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content:
+                                                    Text('Operation not found'),
+                                                backgroundColor: Colors.red,
+                                              ),
+                                            );
                                             return;
                                           }
 
@@ -205,11 +204,15 @@ class _JoinGameScreenState extends State<JoinGameScreen>
                                               .joinRoom(room.id);
 
                                           if (mounted) {
-                                            await Navigator.pushReplacement(
+                                            Navigator.pushReplacement(
                                               context,
                                               MaterialPageRoute(
-                                                builder: (context) =>
-                                                    GameLobbyScreen(room: room),
+                                                builder: (context) => room
+                                                            .status ==
+                                                        'playing'
+                                                    ? GameRoomScreen(room: room)
+                                                    : GameLobbyScreen(
+                                                        room: room),
                                               ),
                                             );
                                           }

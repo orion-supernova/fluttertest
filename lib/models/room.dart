@@ -24,20 +24,12 @@ class Room {
   });
 
   factory Room.fromJson(Map<String, dynamic> json) {
-    List<String> convertPlayerIds(dynamic playerIdsData) {
-      if (playerIdsData == null) return [];
-      if (playerIdsData is List) {
-        return List<String>.from(playerIdsData.map((e) => e.toString()));
-      }
-      return [];
-    }
-
     return Room(
-      id: json['\$id'],
+      id: json['\$id'] ?? json['id'],
       roomCode: json['roomCode'],
       hostId: json['hostId'],
-      playerIds: convertPlayerIds(json['playerIds']),
-      status: json['status'],
+      playerIds: List<String>.from(json['playerIds'] ?? []),
+      status: json['status'] ?? 'waiting',
       createdAt: DateTime.parse(json['createdAt']),
       maxPlayers: json['maxPlayers'],
       minPlayers: json['minPlayers'],

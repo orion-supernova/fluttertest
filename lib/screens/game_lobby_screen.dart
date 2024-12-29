@@ -7,6 +7,7 @@ import '../widgets/cyberpunk_widgets.dart';
 import 'package:provider/provider.dart';
 import '../providers/user_provider.dart';
 import 'dart:async';
+import 'game_room_screen.dart';
 
 class GameLobbyScreen extends StatefulWidget {
   final Room room;
@@ -25,6 +26,9 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
   late final Stream<Room> _roomStream;
   late final Stream<List<User>> _playersStream;
   bool _isSettingReady = false;
+  Timer? _countdownTimer;
+  int _countdown = 5;
+  bool _isCountingDown = false;
 
   @override
   void initState() {
@@ -43,13 +47,14 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
       await _setNotReady();
       print('SetNotReady completed in dispose');
     }
+    _countdownTimer?.cancel();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print('App lifecycle state changed to: $state');
-    if (state == AppLifecycleState.paused && !_isSettingReady) {
+    if (state == AppLifecycleState.inactive && !_isSettingReady) {
       _setNotReady();
     }
   }
@@ -101,8 +106,38 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
     try {
       await AppwriteService().setPlayerReady(!_isReady);
       setState(() => _isReady = !_isReady);
+
+      // Only check for countdown if setting to ready
+      if (_isReady) {
+        // Get fresh list of players
+        final players = await AppwriteService().getRoomPlayers(widget.room.id);
+        print(
+            'Current players: ${players.map((p) => '${p.nickname}: ${p.isReady}')}');
+
+        // Check if all players are ready and meet minimum requirement
+        final allReady = players.every((p) => p.isReady);
+        final enoughPlayers = players.length >= widget.room.minPlayers;
+
+        print('All players ready: $allReady, Enough players: $enoughPlayers');
+
+        if (allReady && enoughPlayers) {
+          print('Starting countdown...');
+          await AppwriteService().updateRoomStatus(widget.room.id, 'countdown');
+        }
+      } else {
+        // If player is unready, cancel countdown
+        await AppwriteService().updateRoomStatus(widget.room.id, 'waiting');
+      }
     } catch (e) {
       print('Error toggling ready state: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -124,6 +159,186 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
     }
   }
 
+  Future<void> _showChangeNicknameDialog() async {
+    final controller = TextEditingController(
+        text: context.read<UserProvider>().user?.nickname);
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.black,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(
+            color: const Color(0xFF00FFFF).withOpacity(0.5),
+            width: 2,
+          ),
+          borderRadius: BorderRadius.circular(0),
+        ),
+        title: const Row(
+          children: [
+            Icon(
+              Icons.edit,
+              color: Color(0xFF00FFFF),
+            ),
+            SizedBox(width: 8),
+            Text(
+              'CHANGE CODENAME',
+              style: TextStyle(
+                color: Color(0xFF00FFFF),
+                letterSpacing: 2,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+        content: Form(
+          key: formKey,
+          child: CyberpunkTextField(
+            label: 'NEW CODENAME',
+            controller: controller,
+            validator: (value) {
+              if (value == null || value.isEmpty) {
+                return 'Codename required';
+              }
+              if (value.length < 3) {
+                return 'Minimum 3 characters';
+              }
+              return null;
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'CANCEL',
+              style: TextStyle(
+                color: const Color(0xFF00FFFF).withOpacity(0.7),
+                letterSpacing: 2,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              if (formKey.currentState!.validate()) {
+                try {
+                  await context
+                      .read<UserProvider>()
+                      .updateNickname(controller.text);
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Codename updated successfully'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error updating codename: $e'),
+                      backgroundColor: Colors.red,
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text(
+              'CONFIRM',
+              style: TextStyle(
+                color: Color(0xFF00FFFF),
+                letterSpacing: 2,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    // Clean up
+    controller.dispose();
+  }
+
+  Future<void> _handleLeaveRoom() async {
+    try {
+      await _setNotReady();
+      await AppwriteService().leaveRoom(widget.room.id);
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      print('Error leaving room: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error leaving room: $e'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  void _startCountdown() {
+    if (_isCountingDown || !mounted) return;
+
+    _countdownTimer?.cancel();
+
+    setState(() {
+      _isCountingDown = true;
+      _countdown = 5;
+    });
+
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
+      if (_countdown > 1) {
+        setState(() => _countdown--);
+      } else {
+        timer.cancel();
+        try {
+          await AppwriteService().updateRoomStatus(widget.room.id, 'playing');
+          // Navigate to game screen
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => GameRoomScreen(room: widget.room),
+              ),
+            );
+          }
+        } catch (e) {
+          print('Error starting game: $e');
+        }
+      }
+    });
+  }
+
+  void _cancelCountdown() {
+    if (!_isCountingDown || !mounted) return;
+
+    _countdownTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _isCountingDown = false;
+        _countdown = 5;
+      });
+    }
+  }
+
+  bool _allPlayersReady(List<User> players) {
+    return players.every((p) => p.isReady) &&
+        players.length >= widget.room.minPlayers;
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentUser = context.watch<UserProvider>().user;
@@ -131,9 +346,14 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
 
     return WillPopScope(
       onWillPop: () async {
-        print('WillPopScope triggered');
-        await _setNotReady();
-        return true;
+        // If coming from game room (status is 'waiting'), allow normal back navigation
+        if (widget.room.status == 'waiting') {
+          print('WillPopScope triggered - leaving room');
+          await _handleLeaveRoom();
+          return true;
+        }
+        // Otherwise prevent back navigation
+        return false;
       },
       child: Scaffold(
         extendBodyBehindAppBar: true,
@@ -146,13 +366,7 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
               IconButton(
                 icon: const Icon(Icons.arrow_back_ios_new),
                 color: const Color(0xFFFF00FF),
-                onPressed: () async {
-                  print('Back button pressed');
-                  await _setNotReady();
-                  if (mounted) {
-                    Navigator.pop(context);
-                  }
-                },
+                onPressed: _handleLeaveRoom,
               ),
               const SizedBox(width: 8),
               Column(
@@ -199,218 +413,288 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
           decoration: const BoxDecoration(
             color: Colors.black,
           ),
-          child: StreamBuilder<List<User>>(
-            stream: _playersStream,
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.error_outline,
-                        color: Color(0xFFFF0000),
-                        size: 48,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Error loading agents: ${snapshot.error}',
-                        style: const TextStyle(color: Color(0xFFFF0000)),
-                      ),
-                    ],
-                  ),
-                );
+          child: StreamBuilder<Room>(
+            stream: _roomStream,
+            builder: (context, roomSnapshot) {
+              if (roomSnapshot.hasData) {
+                final room = roomSnapshot.data!;
+                print('Room status from stream: ${room.status}');
+
+                // Handle room status changes using post-frame callback
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  switch (room.status) {
+                    case 'countdown':
+                      if (!_isCountingDown) {
+                        _startCountdown();
+                      }
+                      break;
+                    case 'waiting':
+                      if (_isCountingDown) {
+                        _cancelCountdown();
+                      }
+                      break;
+                    case 'playing':
+                      // Navigate to game screen
+                      if (mounted) {
+                        Navigator.pushReplacement(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => GameRoomScreen(room: room),
+                          ),
+                        );
+                      }
+                      break;
+                  }
+                });
               }
 
-              final players = snapshot.data ?? _players;
+              final room = roomSnapshot.data ?? widget.room;
+              print('Room snapshot: ${room.status}');
 
-              return SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Status Panel
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.black,
-                          border: Border.all(
-                            color:
-                                const Color(0xFF00FFFF).withValues(alpha: 0.5),
+              return StreamBuilder<List<User>>(
+                stream: _playersStream,
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    print('Player stream error: ${snapshot.error}');
+                    return Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            color: Color(0xFFFF0000),
+                            size: 48,
                           ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF00FFFF)
-                                  .withValues(alpha: 0.1),
-                              blurRadius: 10,
-                            ),
-                          ],
-                        ),
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                _StatusItem(
-                                  label: 'AGENTS',
-                                  value:
-                                      '${players.length}/${widget.room.maxPlayers}',
-                                  icon: Icons.group,
+                          const SizedBox(height: 16),
+                          Text(
+                            'Error loading agents: ${snapshot.error}',
+                            style: const TextStyle(color: Color(0xFFFF0000)),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
+
+                  final players = snapshot.data ?? _players;
+                  print(
+                      'Players ready status: ${players.map((p) => p.isReady)}');
+
+                  return Stack(
+                    children: [
+                      SafeArea(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Status Panel
+                              Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: Colors.black,
+                                  border: Border.all(
+                                    color: const Color(0xFF00FFFF)
+                                        .withValues(alpha: 0.5),
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFF00FFFF)
+                                          .withValues(alpha: 0.1),
+                                      blurRadius: 10,
+                                    ),
+                                  ],
                                 ),
-                                _StatusItem(
-                                  label: 'READY',
-                                  value:
-                                      '${_getReadyCount(players)}/${players.length}',
-                                  icon: Icons.check_circle,
-                                  color: _allPlayersReady(players)
-                                      ? const Color(0xFF00FF00)
-                                      : const Color(0xFFFF0000),
-                                ),
-                              ],
-                            ),
-                            if (widget.room.minPlayers > players.length) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                'Need ${widget.room.minPlayers - players.length} more agent(s)',
-                                style: const TextStyle(
-                                  color: Color(0xFFFF0000),
-                                  fontSize: 12,
+                                child: Column(
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        _StatusItem(
+                                          label: 'AGENTS',
+                                          value:
+                                              '${players.length}/${widget.room.maxPlayers}',
+                                          icon: Icons.group,
+                                        ),
+                                        _StatusItem(
+                                          label: 'READY',
+                                          value:
+                                              '${_getReadyCount(players)}/${players.length}',
+                                          icon: Icons.check_circle,
+                                          color: _allPlayersReady(players)
+                                              ? const Color(0xFF00FF00)
+                                              : const Color(0xFFFF0000),
+                                        ),
+                                      ],
+                                    ),
+                                    if (widget.room.minPlayers >
+                                        players.length) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Need ${widget.room.minPlayers - players.length} more agent(s)',
+                                        style: const TextStyle(
+                                          color: Color(0xFFFF0000),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
                                 ),
                               ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      // Player List
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: players.length,
-                          itemBuilder: (context, index) {
-                            final player = players[index];
-                            final isCurrentUser =
-                                player.userId == currentUser?.userId;
-                            final isPlayerHost =
-                                player.userId == widget.room.hostId;
+                              const SizedBox(height: 24),
+                              // Player List
+                              Expanded(
+                                child: ListView.builder(
+                                  itemCount: players.length,
+                                  itemBuilder: (context, index) {
+                                    final player = players[index];
+                                    final isCurrentUser =
+                                        player.userId == currentUser?.userId;
+                                    final isPlayerHost =
+                                        player.userId == widget.room.hostId;
 
-                            return Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              decoration: BoxDecoration(
-                                color: Colors.black,
-                                border: Border.all(
-                                  color: isPlayerHost
-                                      ? const Color(0xFFFF00FF)
-                                          .withValues(alpha: 0.5)
-                                      : const Color(0xFF00FFFF)
-                                          .withValues(alpha: 0.3),
+                                    return Container(
+                                      margin: const EdgeInsets.only(bottom: 12),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black,
+                                        border: Border.all(
+                                          color: isPlayerHost
+                                              ? const Color(0xFFFF00FF)
+                                                  .withValues(alpha: 0.5)
+                                              : const Color(0xFF00FFFF)
+                                                  .withValues(alpha: 0.3),
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: (isPlayerHost
+                                                    ? const Color(0xFFFF00FF)
+                                                    : const Color(0xFF00FFFF))
+                                                .withValues(alpha: 0.1),
+                                            blurRadius: 5,
+                                          ),
+                                        ],
+                                      ),
+                                      child: ListTile(
+                                        leading: Stack(
+                                          children: [
+                                            Icon(
+                                              isPlayerHost
+                                                  ? Icons.security
+                                                  : Icons.person,
+                                              color: isPlayerHost
+                                                  ? const Color(0xFFFF00FF)
+                                                  : const Color(0xFF00FFFF),
+                                              size: 28,
+                                            ),
+                                            if (player.isReady)
+                                              Positioned(
+                                                right: 0,
+                                                bottom: 0,
+                                                child: Container(
+                                                  decoration:
+                                                      const BoxDecoration(
+                                                    color: Colors.black,
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                  child: const Icon(
+                                                    Icons.check_circle,
+                                                    color: Color(0xFF00FF00),
+                                                    size: 14,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        ),
+                                        title: Text(
+                                          player.nickname +
+                                              (isCurrentUser ? ' (YOU)' : ''),
+                                          style: TextStyle(
+                                            color: isPlayerHost
+                                                ? const Color(0xFFFF00FF)
+                                                : const Color(0xFF00FFFF),
+                                            letterSpacing: 1.5,
+                                            fontWeight: isCurrentUser
+                                                ? FontWeight.bold
+                                                : FontWeight.normal,
+                                          ),
+                                        ),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (isCurrentUser)
+                                              IconButton(
+                                                icon: const Icon(Icons.edit),
+                                                color: const Color(0xFF00FFFF),
+                                                tooltip: 'Change Codename',
+                                                onPressed:
+                                                    _showChangeNicknameDialog,
+                                              ),
+                                            if (!isCurrentUser)
+                                              IconButton(
+                                                icon: const Icon(Icons.close),
+                                                color: Colors.red,
+                                                tooltip: 'Kick Agent',
+                                                onPressed: () =>
+                                                    _kickPlayer(player.userId),
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: (isPlayerHost
-                                            ? const Color(0xFFFF00FF)
-                                            : const Color(0xFF00FFFF))
-                                        .withValues(alpha: 0.1),
-                                    blurRadius: 5,
+                              ),
+                              const SizedBox(height: 24),
+                              // Bottom Actions
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: CyberpunkButton(
+                                      onPressed: _toggleReady,
+                                      label:
+                                          _isReady ? 'STAND DOWN' : 'READY UP',
+                                      icon:
+                                          _isReady ? Icons.cancel : Icons.check,
+                                      color: _isReady
+                                          ? const Color(0xFFFF0000)
+                                          : const Color(0xFF00FF00),
+                                    ),
                                   ),
                                 ],
                               ),
-                              child: ListTile(
-                                leading: Stack(
-                                  children: [
-                                    Icon(
-                                      isPlayerHost
-                                          ? Icons.security
-                                          : Icons.person,
-                                      color: isPlayerHost
-                                          ? const Color(0xFFFF00FF)
-                                          : const Color(0xFF00FFFF),
-                                      size: 28,
-                                    ),
-                                    if (player.isReady)
-                                      Positioned(
-                                        right: 0,
-                                        bottom: 0,
-                                        child: Container(
-                                          decoration: const BoxDecoration(
-                                            color: Colors.black,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.check_circle,
-                                            color: Color(0xFF00FF00),
-                                            size: 14,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                title: Text(
-                                  player.nickname +
-                                      (isCurrentUser ? ' (YOU)' : ''),
-                                  style: TextStyle(
-                                    color: isPlayerHost
-                                        ? const Color(0xFFFF00FF)
-                                        : const Color(0xFF00FFFF),
-                                    letterSpacing: 1.5,
-                                    fontWeight: isCurrentUser
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
-                                  ),
-                                ),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (!isCurrentUser)
-                                      IconButton(
-                                        icon: const Icon(Icons.close),
-                                        color: Colors.red,
-                                        tooltip: 'Kick Agent',
-                                        onPressed: () =>
-                                            _kickPlayer(player.userId),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
+                            ],
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 24),
-                      // Bottom Actions
-                      Row(
-                        children: [
-                          Expanded(
-                            child: CyberpunkButton(
-                              onPressed: _toggleReady,
-                              label: _isReady ? 'STAND DOWN' : 'READY UP',
-                              icon: _isReady ? Icons.cancel : Icons.check,
-                              color: _isReady
-                                  ? const Color(0xFFFF0000)
-                                  : const Color(0xFF00FF00),
-                            ),
-                          ),
-                          if (isHost) ...[
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: CyberpunkButton(
-                                onPressed: _allPlayersReady(players) &&
-                                        players.length >= widget.room.minPlayers
-                                    ? () {
-                                        // Start game logic
-                                        HapticFeedback.heavyImpact();
-                                      }
-                                    : null,
-                                label: 'START MISSION',
-                                icon: Icons.play_arrow,
+                      if (room.status == 'countdown')
+                        Stack(
+                          children: [
+                            _CountdownOverlay(seconds: _countdown),
+                            Positioned(
+                              bottom: 100,
+                              left: 0,
+                              right: 0,
+                              child: Center(
+                                child: CyberpunkButton(
+                                  onPressed: () async {
+                                    try {
+                                      await AppwriteService()
+                                          .updateRoomStatus(room.id, 'waiting');
+                                    } catch (e) {
+                                      print('Error canceling countdown: $e');
+                                    }
+                                  },
+                                  label: 'CANCEL COUNTDOWN',
+                                  icon: Icons.cancel,
+                                  color: const Color(0xFFFF0000),
+                                ),
                               ),
                             ),
                           ],
-                        ],
-                      ),
+                        ),
                     ],
-                  ),
-                ),
+                  );
+                },
               );
             },
           ),
@@ -421,11 +705,6 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
 
   int _getReadyCount(List<User> players) {
     return players.where((p) => p.isReady).length;
-  }
-
-  bool _allPlayersReady(List<User> players) {
-    return players.every((p) => p.isReady) &&
-        players.length >= widget.room.minPlayers;
   }
 }
 
@@ -476,6 +755,43 @@ class _StatusItem extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _CountdownOverlay extends StatelessWidget {
+  final int seconds;
+
+  const _CountdownOverlay({required this.seconds});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withOpacity(0.8),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text(
+              'MISSION STARTING IN',
+              style: TextStyle(
+                color: Color(0xFF00FFFF),
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '$seconds',
+              style: const TextStyle(
+                color: Color(0xFFFF00FF),
+                fontSize: 72,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
