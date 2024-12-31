@@ -160,107 +160,107 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
   }
 
   Future<void> _showChangeNicknameDialog() async {
-    final controller = TextEditingController(
-        text: context.read<UserProvider>().user?.nickname);
-    final formKey = GlobalKey<FormState>();
+    String? currentNickname = context.read<UserProvider>().user?.nickname;
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        shape: RoundedRectangleBorder(
-          side: BorderSide(
-            color: const Color(0xFF00FFFF).withOpacity(0.5),
-            width: 2,
-          ),
-          borderRadius: BorderRadius.circular(0),
-        ),
-        title: const Row(
-          children: [
-            Icon(
-              Icons.edit,
-              color: Color(0xFF00FFFF),
+      builder: (dialogContext) {
+        final controller = TextEditingController(text: currentNickname);
+        final formKey = GlobalKey<FormState>();
+
+        return AlertDialog(
+          backgroundColor: Colors.black,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(
+              color: const Color(0xFF00FFFF).withOpacity(0.5),
+              width: 2,
             ),
-            SizedBox(width: 8),
-            Text(
-              'CHANGE CODENAME',
-              style: TextStyle(
+            borderRadius: BorderRadius.circular(0),
+          ),
+          title: const Row(
+            children: [
+              Icon(
+                Icons.edit,
                 color: Color(0xFF00FFFF),
-                letterSpacing: 2,
-                fontSize: 16,
               ),
-            ),
-          ],
-        ),
-        content: Form(
-          key: formKey,
-          child: CyberpunkTextField(
-            label: 'NEW CODENAME',
-            controller: controller,
-            validator: (value) {
-              if (value == null || value.isEmpty) {
-                return 'Codename required';
-              }
-              if (value.length < 3) {
-                return 'Minimum 3 characters';
-              }
-              return null;
-            },
+              SizedBox(width: 8),
+              Text(
+                'CHANGE CODENAME',
+                style: TextStyle(
+                  color: Color(0xFF00FFFF),
+                  letterSpacing: 2,
+                  fontSize: 16,
+                ),
+              ),
+            ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text(
-              'CANCEL',
-              style: TextStyle(
-                color: const Color(0xFF00FFFF).withOpacity(0.7),
-                letterSpacing: 2,
-              ),
+          content: Form(
+            key: formKey,
+            child: CyberpunkTextField(
+              label: 'NEW CODENAME',
+              controller: controller,
+              validator: (value) {
+                if (value == null || value.isEmpty) {
+                  return 'Codename required';
+                }
+                if (value.length < 3) {
+                  return 'Minimum 3 characters';
+                }
+                return null;
+              },
             ),
           ),
-          TextButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                try {
-                  await context
-                      .read<UserProvider>()
-                      .updateNickname(controller.text);
-                  if (mounted) {
-                    Navigator.pop(context);
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(
+                'CANCEL',
+                style: TextStyle(
+                  color: const Color(0xFF00FFFF).withOpacity(0.7),
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                if (formKey.currentState!.validate()) {
+                  try {
+                    await context
+                        .read<UserProvider>()
+                        .updateNickname(controller.text);
+                    if (mounted) {
+                      Navigator.pop(dialogContext);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Codename updated successfully'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  } catch (e) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Codename updated successfully'),
+                      SnackBar(
+                        content: Text('Error updating codename: $e'),
+                        backgroundColor: Colors.red,
                         behavior: SnackBarBehavior.floating,
                       ),
                     );
                   }
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Error updating codename: $e'),
-                      backgroundColor: Colors.red,
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
                 }
-              }
-            },
-            child: const Text(
-              'CONFIRM',
-              style: TextStyle(
-                color: Color(0xFF00FFFF),
-                letterSpacing: 2,
-                fontWeight: FontWeight.bold,
+              },
+              child: const Text(
+                'CONFIRM',
+                style: TextStyle(
+                  color: Color(0xFF00FFFF),
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
     );
-
-    // Clean up
-    controller.dispose();
   }
 
   Future<void> _handleLeaveRoom() async {
@@ -287,14 +287,13 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
   void _startCountdown() {
     if (_isCountingDown || !mounted) return;
 
-    _countdownTimer?.cancel();
-
     setState(() {
       _isCountingDown = true;
       _countdown = 5;
     });
 
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
@@ -304,20 +303,17 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
         setState(() => _countdown--);
       } else {
         timer.cancel();
-        try {
-          await AppwriteService().updateRoomStatus(widget.room.id, 'playing');
-          // Navigate to game screen
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => GameRoomScreen(room: widget.room),
-              ),
-            );
-          }
-        } catch (e) {
+        setState(() {
+          _isCountingDown = false;
+          _countdown = 5;
+        });
+
+        // Update room status to playing
+        AppwriteService()
+            .updateRoomStatus(widget.room.id, 'playing')
+            .catchError((e) {
           print('Error starting game: $e');
-        }
+        });
       }
     });
   }
@@ -418,32 +414,22 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
             builder: (context, roomSnapshot) {
               if (roomSnapshot.hasData) {
                 final room = roomSnapshot.data!;
-                print('Room status from stream: ${room.status}');
 
-                // Handle room status changes using post-frame callback
+                // Handle countdown state
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  switch (room.status) {
-                    case 'countdown':
-                      if (!_isCountingDown) {
-                        _startCountdown();
-                      }
-                      break;
-                    case 'waiting':
-                      if (_isCountingDown) {
-                        _cancelCountdown();
-                      }
-                      break;
-                    case 'playing':
-                      // Navigate to game screen
-                      if (mounted) {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => GameRoomScreen(room: room),
-                          ),
-                        );
-                      }
-                      break;
+                  if (room.status == 'countdown' && !_isCountingDown) {
+                    _startCountdown();
+                  } else if (room.status != 'countdown' && _isCountingDown) {
+                    _cancelCountdown();
+                  } else if (room.status == 'playing') {
+                    if (mounted) {
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => GameRoomScreen(room: room),
+                        ),
+                      );
+                    }
                   }
                 });
               }
