@@ -1,6 +1,10 @@
 pipeline {
     agent any
     
+    options {
+        skipDefaultCheckout(true) // Skip the default checkout
+    }
+    
     environment {
         // Apple Developer details
         DEVELOPER_PORTAL_TEAM_ID = '37TC2VKVJ6'
@@ -10,76 +14,93 @@ pipeline {
         ASC_KEY_ID = 'HY4C8ZCTXZ'
         ASC_ISSUER_ID = '33ee1d05-040f-46ad-ae55-8cea58f58e0a'
         ASC_KEY_PATH = '/Users/muratcankoc/Desktop/AppStoreConnectAPIKey'
-        
-        // Flutter path - using correct path from your system
-        FLUTTER_HOME = '/Users/muratcankoc/development/flutter'
-        PATH = "${FLUTTER_HOME}/bin:${env.PATH}"
-    }
-
-    triggers {
-        // Poll SCM every 5 minutes for changes
-        pollSCM('*/5 * * * *')
     }
 
     stages {
-        stage('Setup') {
+        stage('Prepare Environment') {
             steps {
-                sh '''
-                    echo "Current PATH: $PATH"
-                    echo "Flutter location:"
-                    which flutter || true
-                    echo "Verifying Flutter installation..."
-                    ${FLUTTER_HOME}/bin/flutter --version || (echo "Flutter not found in PATH" && exit 1)
-                '''
+                node {
+                    cleanWs() // Clean workspace before starting
+                    script {
+                        env.FLUTTER_ROOT = '/Users/muratcankoc/development/flutter'
+                        env.PATH = "${env.FLUTTER_ROOT}/bin:${env.PATH}"
+                        
+                        // Verify environment
+                        sh '''
+                            echo "Workspace: ${WORKSPACE}"
+                            echo "PATH: ${PATH}"
+                            echo "Flutter location:"
+                            ls -la ${FLUTTER_ROOT}/bin/flutter
+                        '''
+                    }
+                }
             }
         }
 
         stage('Checkout') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    extensions: [],
-                    userRemoteConfigs: [[
-                        url: '/Users/muratcankoc/Desktop/fluttertest'
-                    ]]
-                ])
+                dir("${env.WORKSPACE}") {
+                    // Clone the existing repository
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        extensions: [
+                            [$class: 'CleanBeforeCheckout'],
+                            [$class: 'CloneOption', depth: 1, noTags: true, reference: '', shallow: true]
+                        ],
+                        userRemoteConfigs: [[
+                            url: '/Users/muratcankoc/Desktop/fluttertest'
+                        ]]
+                    ])
+                }
             }
         }
         
-        stage('Flutter Clean') {
+        stage('Flutter Setup') {
             steps {
                 sh '''
-                    ${FLUTTER_HOME}/bin/flutter clean
-                    ${FLUTTER_HOME}/bin/flutter pub get
+                    ${FLUTTER_ROOT}/bin/flutter doctor
+                    ${FLUTTER_ROOT}/bin/flutter --version
                 '''
             }
         }
         
-        stage('Build iOS') {
+        stage('Flutter Build') {
             steps {
-                sh '''
-                    ${FLUTTER_HOME}/bin/flutter build ios --release --no-codesign
-                    cd ios
-                    xcodebuild -workspace Runner.xcworkspace \
-                        -scheme Runner \
-                        -configuration Release \
-                        -archivePath Runner.xcarchive \
-                        clean archive \
-                        CODE_SIGN_IDENTITY="iPhone Distribution" \
-                        DEVELOPMENT_TEAM="$DEVELOPER_PORTAL_TEAM_ID"
-                '''
+                dir("${env.WORKSPACE}") {
+                    sh '''
+                        ${FLUTTER_ROOT}/bin/flutter clean
+                        ${FLUTTER_ROOT}/bin/flutter pub get
+                        ${FLUTTER_ROOT}/bin/flutter build ios --release --no-codesign
+                    '''
+                }
             }
         }
         
-        stage('Deploy to App Store') {
+        stage('iOS Build') {
             steps {
-                sh '''
-                    cd ios
-                    xcodebuild -exportArchive \
-                        -archivePath Runner.xcarchive \
-                        -exportPath ./build \
-                        -exportOptionsPlist <(cat << EOF
+                dir("${env.WORKSPACE}/ios") {
+                    sh '''
+                        xcodebuild -workspace Runner.xcworkspace \
+                            -scheme Runner \
+                            -configuration Release \
+                            -archivePath Runner.xcarchive \
+                            clean archive \
+                            CODE_SIGN_IDENTITY="iPhone Distribution" \
+                            DEVELOPMENT_TEAM="$DEVELOPER_PORTAL_TEAM_ID"
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy') {
+            steps {
+                dir("${env.WORKSPACE}/ios") {
+                    sh '''
+                        xcodebuild -exportArchive \
+                            -archivePath Runner.xcarchive \
+                            -exportPath ./build \
+                            -exportOptionsPlist <(cat << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -97,24 +118,39 @@ pipeline {
 </plist>
 EOF
 )
-                    
-                    xcrun altool --upload-app \
-                        --type ios \
-                        --file "build/Runner.ipa" \
-                        --apiKey "$ASC_KEY_ID" \
-                        --apiIssuer "$ASC_ISSUER_ID" \
-                        --asc-provider "$DEVELOPER_PORTAL_TEAM_ID"
-                '''
+                        
+                        xcrun altool --upload-app \
+                            --type ios \
+                            --file "build/Runner.ipa" \
+                            --apiKey "$ASC_KEY_ID" \
+                            --apiIssuer "$ASC_ISSUER_ID" \
+                            --asc-provider "$DEVELOPER_PORTAL_TEAM_ID"
+                    '''
+                }
             }
         }
     }
     
     post {
+        always {
+            node {
+                script {
+                    cleanWs(cleanWhenNotBuilt: false,
+                           deleteDirs: true,
+                           disableDeferredWipeout: true,
+                           notFailBuild: true)
+                }
+            }
+        }
         success {
-            echo 'Successfully built and deployed to App Store!'
+            node {
+                echo 'Successfully built and deployed to App Store!'
+            }
         }
         failure {
-            echo 'Build or deployment failed!'
+            node {
+                echo 'Build or deployment failed!'
+            }
         }
     }
 } 
