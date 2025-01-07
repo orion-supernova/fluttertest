@@ -1,10 +1,6 @@
 pipeline {
     agent any
     
-    options {
-        skipDefaultCheckout(true) // Skip the default checkout
-    }
-    
     environment {
         // Apple Developer details
         DEVELOPER_PORTAL_TEAM_ID = '37TC2VKVJ6'
@@ -14,72 +10,41 @@ pipeline {
         ASC_KEY_ID = 'HY4C8ZCTXZ'
         ASC_ISSUER_ID = '33ee1d05-040f-46ad-ae55-8cea58f58e0a'
         ASC_KEY_PATH = '/Users/muratcankoc/Desktop/AppStoreConnectAPIKey'
+        
+        // Flutter path
+        PATH = "/Users/muratcankoc/development/flutter/bin:${env.PATH}"
     }
 
     stages {
-        stage('Prepare Environment') {
+        stage('Verify Environment') {
             steps {
-                node {
-                    cleanWs() // Clean workspace before starting
-                    script {
-                        env.FLUTTER_ROOT = '/Users/muratcankoc/development/flutter'
-                        env.PATH = "${env.FLUTTER_ROOT}/bin:${env.PATH}"
-                        
-                        // Verify environment
-                        sh '''
-                            echo "Workspace: ${WORKSPACE}"
-                            echo "PATH: ${PATH}"
-                            echo "Flutter location:"
-                            ls -la ${FLUTTER_ROOT}/bin/flutter
-                        '''
-                    }
-                }
+                sh '''
+                    echo "PATH = $PATH"
+                    which flutter
+                    flutter --version
+                '''
             }
         }
 
         stage('Checkout') {
             steps {
-                dir("${env.WORKSPACE}") {
-                    // Clone the existing repository
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: '*/main']],
-                        extensions: [
-                            [$class: 'CleanBeforeCheckout'],
-                            [$class: 'CloneOption', depth: 1, noTags: true, reference: '', shallow: true]
-                        ],
-                        userRemoteConfigs: [[
-                            url: '/Users/muratcankoc/Desktop/fluttertest'
-                        ]]
-                    ])
-                }
+                git url: '/Users/muratcankoc/Desktop/fluttertest', branch: 'main'
             }
         }
         
-        stage('Flutter Setup') {
+        stage('Build') {
             steps {
                 sh '''
-                    ${FLUTTER_ROOT}/bin/flutter doctor
-                    ${FLUTTER_ROOT}/bin/flutter --version
+                    flutter clean
+                    flutter pub get
+                    flutter build ios --release --no-codesign
                 '''
             }
         }
         
-        stage('Flutter Build') {
+        stage('iOS Build & Deploy') {
             steps {
-                dir("${env.WORKSPACE}") {
-                    sh '''
-                        ${FLUTTER_ROOT}/bin/flutter clean
-                        ${FLUTTER_ROOT}/bin/flutter pub get
-                        ${FLUTTER_ROOT}/bin/flutter build ios --release --no-codesign
-                    '''
-                }
-            }
-        }
-        
-        stage('iOS Build') {
-            steps {
-                dir("${env.WORKSPACE}/ios") {
+                dir('ios') {
                     sh '''
                         xcodebuild -workspace Runner.xcworkspace \
                             -scheme Runner \
@@ -88,15 +53,7 @@ pipeline {
                             clean archive \
                             CODE_SIGN_IDENTITY="iPhone Distribution" \
                             DEVELOPMENT_TEAM="$DEVELOPER_PORTAL_TEAM_ID"
-                    '''
-                }
-            }
-        }
-        
-        stage('Deploy') {
-            steps {
-                dir("${env.WORKSPACE}/ios") {
-                    sh '''
+                            
                         xcodebuild -exportArchive \
                             -archivePath Runner.xcarchive \
                             -exportPath ./build \
@@ -132,25 +89,11 @@ EOF
     }
     
     post {
-        always {
-            node {
-                script {
-                    cleanWs(cleanWhenNotBuilt: false,
-                           deleteDirs: true,
-                           disableDeferredWipeout: true,
-                           notFailBuild: true)
-                }
-            }
-        }
         success {
-            node {
-                echo 'Successfully built and deployed to App Store!'
-            }
+            echo 'Successfully built and deployed to App Store!'
         }
         failure {
-            node {
-                echo 'Build or deployment failed!'
-            }
+            echo 'Build or deployment failed!'
         }
     }
 } 
