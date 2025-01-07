@@ -1,8 +1,11 @@
 import 'package:appwrite/appwrite.dart';
 import 'package:appwrite/models.dart' as models;
 import 'package:appwrite/src/enums.dart';
+import 'dart:math';
+import 'dart:convert';
 import '../models/room.dart';
 import '../models/user.dart';
+import '../models/location.dart';
 
 class AppwriteService {
   static final AppwriteService _instance = AppwriteService._internal();
@@ -19,6 +22,11 @@ class AppwriteService {
   static const String _usersCollectionId = '676f1fd70021b0527f11';
   static const String _endpoint = 'https://cloud.appwrite.io/v1';
   static const String _projectId = '673ccac6002a8a5135e6';
+
+  static const String STATUS_WAIT = 'wait';
+  static const String STATUS_INIT = 'init';
+  static const String STATUS_PLAY = 'play';
+  static const String STATUS_COUNT = 'count';
 
   Future<void> initialize() async {
     _client =
@@ -363,49 +371,66 @@ class AppwriteService {
   }
 
   Stream<Room> subscribeToRoom(String roomId) {
-    final realtime = Realtime(_client);
-    print('Subscribing to room: $roomId');
-    return realtime
-        .subscribe([
-          'databases.$_databaseId.collections.$_roomsCollectionId.documents.$roomId'
-        ])
-        .stream
-        .map((event) {
-          if (event.events
-              .contains('databases.*.collections.*.documents.*.update')) {
-            print('Room update event received');
-            final room = Room.fromJson(event.payload);
-            print(
-                'Room status: ${room.status}, Players: ${room.playerIds.length}');
-            return room;
-          }
-          return Room.fromJson(event.payload);
-        });
+    try {
+      final realtime = Realtime(_client);
+      final subscription = realtime.subscribe([
+        'databases.$_databaseId.collections.$_roomsCollectionId.documents.$roomId'
+      ]);
+
+      return subscription.stream.map((response) {
+        print('Room subscription event received');
+        print('Events: ${response.events}');
+        print('Full payload: ${response.payload}');
+
+        if (response.events
+            .contains('databases.*.collections.*.documents.*.delete')) {
+          throw 'Room deleted';
+        }
+
+        final room = Room.fromJson(response.payload);
+        print(
+            'Parsed room data - status: ${room.status}, spyId: ${room.spyId}, location: ${room.location}');
+        return room;
+      });
+    } catch (e) {
+      print('Error subscribing to room: $e');
+      rethrow;
+    }
   }
 
   Stream<List<User>> subscribeToRoomPlayers(String roomId) {
+    print('Setting up room players subscription for room: $roomId');
     final realtime = Realtime(_client);
 
-    // Subscribe to all user document changes
+    // Subscribe to both room and user collection changes
     return realtime
         .subscribe([
+          'databases.$_databaseId.collections.$_roomsCollectionId.documents',
           'databases.$_databaseId.collections.$_usersCollectionId.documents'
         ])
         .stream
         .asyncMap((_) async {
-          // Get all players in room whenever there's any change
+          print('Received player update event');
           try {
             final response = await _databases.listDocuments(
               databaseId: _databaseId,
               collectionId: _usersCollectionId,
-              queries: [Query.equal('currentRoomId', roomId)],
+              queries: [
+                Query.equal('currentRoomId', roomId),
+                Query.orderAsc('nickname'),
+              ],
             );
 
-            return response.documents
+            final players = response.documents
                 .map((doc) => User.fromJson(doc.data))
                 .toList();
+            print('Found ${players.length} players in room');
+            print(
+                'Player nicknames: ${players.map((p) => p.nickname).toList()}');
+            return players;
           } catch (e) {
             print('Error getting room players: $e');
+            print('Stack trace: ${StackTrace.current}');
             return <User>[];
           }
         });
@@ -470,9 +495,14 @@ class AppwriteService {
   Future<void> leaveRoom(String roomId, {String? userId}) async {
     // Use provided userId or current user's id
     final targetUserId = userId ?? _userId;
-    if (targetUserId == null) return;
+    if (targetUserId == null) {
+      print('Cannot leave room: No user ID');
+      return;
+    }
 
     try {
+      print('Leaving room: $roomId for user: $targetUserId');
+
       // Update user document
       final userDoc = await _databases.listDocuments(
         databaseId: _databaseId,
@@ -481,6 +511,7 @@ class AppwriteService {
       );
 
       if (userDoc.documents.isNotEmpty) {
+        print('Updating user document...');
         await _databases.updateDocument(
           databaseId: _databaseId,
           collectionId: _usersCollectionId,
@@ -493,6 +524,7 @@ class AppwriteService {
       }
 
       // Remove user from room's player list
+      print('Getting room document...');
       final room = await _databases.getDocument(
         databaseId: _databaseId,
         collectionId: _roomsCollectionId,
@@ -503,6 +535,7 @@ class AppwriteService {
           List<String>.from(room.data['playerIds'] ?? []);
       players.remove(targetUserId);
 
+      print('Updating room document...');
       await _databases.updateDocument(
         databaseId: _databaseId,
         collectionId: _roomsCollectionId,
@@ -510,9 +543,10 @@ class AppwriteService {
         data: {'playerIds': players},
       );
 
-      print('Successfully removed user: $targetUserId from room: $roomId');
+      print('Successfully left room');
     } catch (e) {
-      print('Error removing user from room: $e');
+      print('Error leaving room: $e');
+      print('Stack trace: ${StackTrace.current}');
       rethrow;
     }
   }
@@ -528,6 +562,229 @@ class AppwriteService {
       print('Room status updated to: $status');
     } catch (e) {
       print('Error updating room status: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> initializeGame(String roomId, {String? excludeLocation}) async {
+    try {
+      print('Starting game initialization...');
+      print('Excluding location: $excludeLocation');
+
+      // Get current room and players
+      final room = await _databases.getDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+      );
+
+      final playerIds = List<String>.from(room.data['playerIds'] ?? []);
+      if (playerIds.isEmpty) {
+        throw 'No players found in room';
+      }
+
+      // Get locations
+      final locationsResponse = await _databases.listDocuments(
+        databaseId: _databaseId,
+        collectionId: '673cd5e80022a5172d73',
+        queries: excludeLocation != null
+            ? [Query.notEqual('name', excludeLocation)]
+            : [],
+      );
+
+      if (locationsResponse.documents.isEmpty) {
+        throw 'No locations available';
+      }
+
+      final random = Random();
+      final randomLocation = locationsResponse
+          .documents[random.nextInt(locationsResponse.documents.length)];
+      print('Selected location: ${randomLocation.data}');
+
+      final roles = List<String>.from(randomLocation.data['roles'] ?? []);
+      if (roles.isEmpty) {
+        throw 'No roles found for location';
+      }
+      print('Available roles: $roles');
+
+      // Select spy
+      final spyId = playerIds[random.nextInt(playerIds.length)];
+      print('Selected spy: $spyId');
+
+      // Assign roles
+      final playerRoles = <String, String>{};
+      final availableRoles = List<String>.from(roles);
+
+      for (final playerId in playerIds) {
+        if (playerId != spyId) {
+          if (availableRoles.isEmpty) {
+            availableRoles.addAll(roles);
+          }
+          final roleIndex = random.nextInt(availableRoles.length);
+          playerRoles[playerId] = availableRoles[roleIndex];
+          availableRoles.removeAt(roleIndex);
+        }
+      }
+      print('Role assignments: $playerRoles');
+
+      // Update room with game data
+      print('Updating room with game data...');
+      final gameData = {
+        'spyId': spyId,
+        'location': randomLocation.data['name'],
+        'playerRoles': jsonEncode(playerRoles),
+        'roundTimeInMinutes': 8,
+        'roundStartTime': DateTime.now().toIso8601String(),
+        'voteInProgress': false,
+        'votes': jsonEncode({}),
+      };
+      print('Game data to update: $gameData');
+
+      await _databases.updateDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+        data: gameData,
+      );
+      print('Game initialization completed successfully!');
+    } catch (e) {
+      print('Error in game initialization: $e');
+      print('Stack trace: ${StackTrace.current}');
+      rethrow;
+    }
+  }
+
+  Future<void> startVoting(String roomId) async {
+    try {
+      await _databases.updateDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+        data: {
+          'voteInProgress': true,
+          'votes': {},
+        },
+      );
+    } catch (e) {
+      print('Error starting vote: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> castVote(
+      String roomId, String voterId, String votedForId) async {
+    try {
+      print('Casting vote - voter: $voterId, voted for: $votedForId');
+
+      // Get current room data
+      final room = await _databases.getDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+      );
+
+      // Parse existing votes
+      Map<String, String> votes = {};
+      if (room.data['votes'] != null) {
+        try {
+          votes = Map<String, String>.from(jsonDecode(room.data['votes']));
+        } catch (e) {
+          print('Error parsing existing votes: $e');
+        }
+      }
+
+      // Add new vote
+      votes[voterId] = votedForId;
+
+      // Update room with new votes
+      await _databases.updateDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+        data: {
+          'votes': jsonEncode(votes),
+        },
+      );
+
+      print('Vote cast successfully');
+      print('Current votes count: ${votes.length}');
+      print('Total players: ${room.data['playerIds'].length}');
+
+      // Check if all players have voted
+      if (votes.length ==
+          List<String>.from(room.data['playerIds'] ?? []).length) {
+        print('All players have voted! Checking results...');
+        await _checkVoteResults(roomId, votes);
+      } else {
+        print(
+            'Waiting for ${List<String>.from(room.data['playerIds'] ?? []).length - votes.length} more votes');
+      }
+    } catch (e) {
+      print('Error casting vote: $e');
+      print('Stack trace: ${StackTrace.current}');
+      rethrow;
+    }
+  }
+
+  Future<void> _checkVoteResults(
+      String roomId, Map<String, String> votes) async {
+    try {
+      final room = await _databases.getDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+      );
+
+      final spyId = room.data['spyId'];
+
+      // Count votes for each player
+      final voteCounts = <String, int>{};
+      for (var votedForId in votes.values) {
+        voteCounts[votedForId] = (voteCounts[votedForId] ?? 0) + 1;
+      }
+
+      // Find player with most votes
+      String? mostVotedPlayer;
+      int maxVotes = 0;
+      voteCounts.forEach((playerId, count) {
+        if (count > maxVotes) {
+          maxVotes = count;
+          mostVotedPlayer = playerId;
+        }
+      });
+
+      // Update game status based on vote results
+      await _databases.updateDocument(
+        databaseId: _databaseId,
+        collectionId: _roomsCollectionId,
+        documentId: roomId,
+        data: {
+          'status': AppwriteService.STATUS_PLAY,
+          'gameResult': mostVotedPlayer == spyId ? 'crew_won' : 'spy_won',
+          'voteInProgress': false,
+        },
+      );
+    } catch (e) {
+      print('Error checking vote results: $e');
+      rethrow;
+    }
+  }
+
+  Future<List<Location>> getLocations() async {
+    try {
+      final response = await _databases.listDocuments(
+        databaseId: _databaseId,
+        collectionId: '673cd5e80022a5172d73', // Locations collection ID
+      );
+
+      return response.documents
+          .map((doc) => Location(
+                name: doc.data['name'],
+                roles: List<String>.from(doc.data['roles'] ?? []),
+              ))
+          .toList();
+    } catch (e) {
+      print('Error fetching locations: $e');
       rethrow;
     }
   }

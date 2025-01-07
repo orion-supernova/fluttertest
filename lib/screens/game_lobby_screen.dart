@@ -42,11 +42,6 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
   @override
   Future<void> dispose() async {
     print('GameLobbyScreen disposing...');
-    WidgetsBinding.instance.removeObserver(this);
-    if (_isReady) {
-      await _setNotReady();
-      print('SetNotReady completed in dispose');
-    }
     _countdownTimer?.cancel();
     super.dispose();
   }
@@ -265,13 +260,28 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
 
   Future<void> _handleLeaveRoom() async {
     try {
-      await _setNotReady();
+      print('Handling leave room...');
+
+      // First set not ready
+      if (_isReady) {
+        print('Setting player not ready before leaving...');
+        await AppwriteService().setPlayerReady(false);
+      }
+
+      // Then leave the room
+      print('Leaving room: ${widget.room.id}');
       await AppwriteService().leaveRoom(widget.room.id);
+
+      print('Successfully left room, navigating back...');
+
+      // Make sure we're mounted and pop the navigation
       if (mounted) {
-        Navigator.pop(context);
+        Navigator.of(context).pop();
       }
     } catch (e) {
       print('Error leaving room: $e');
+      print('Stack trace: ${StackTrace.current}');
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -293,11 +303,13 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
     });
 
     _countdownTimer?.cancel();
-    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
         timer.cancel();
         return;
       }
+
+      print('Countdown: $_countdown');
 
       if (_countdown > 1) {
         setState(() => _countdown--);
@@ -308,12 +320,60 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
           _countdown = 5;
         });
 
-        // Update room status to playing
-        AppwriteService()
-            .updateRoomStatus(widget.room.id, 'playing')
-            .catchError((e) {
-          print('Error starting game: $e');
-        });
+        try {
+          print('Starting game initialization sequence...');
+
+          // First update status to initializing
+          await AppwriteService()
+              .updateRoomStatus(widget.room.id, AppwriteService.STATUS_INIT);
+          print('Room status set to initializing');
+
+          // Initialize game data
+          await AppwriteService().initializeGame(widget.room.id);
+          print('Game initialization completed');
+
+          // Update status to playing
+          await AppwriteService()
+              .updateRoomStatus(widget.room.id, AppwriteService.STATUS_PLAY);
+          print('Room status set to playing');
+
+          if (!mounted) return;
+
+          // Get the updated room data with all game information
+          final updatedRoom =
+              await AppwriteService().getRoom(widget.room.roomCode);
+          print(
+              'Got updated room data: ${updatedRoom?.spyId}, ${updatedRoom?.location}, ${updatedRoom?.playerRoles}');
+
+          if (updatedRoom == null) {
+            throw 'Failed to get updated room data';
+          }
+
+          // Navigate to game room with the updated room data
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => GameRoomScreen(room: updatedRoom),
+            ),
+          );
+        } catch (e) {
+          print('Error in game start sequence: $e');
+          print('Stack trace: ${StackTrace.current}');
+
+          // Reset room on error
+          await AppwriteService()
+              .updateRoomStatus(widget.room.id, AppwriteService.STATUS_WAIT);
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error starting game: $e'),
+                backgroundColor: Colors.red,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+        }
       }
     });
   }
@@ -342,14 +402,9 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
 
     return WillPopScope(
       onWillPop: () async {
-        // If coming from game room (status is 'waiting'), allow normal back navigation
-        if (widget.room.status == 'waiting') {
-          print('WillPopScope triggered - leaving room');
-          await _handleLeaveRoom();
-          return true;
-        }
-        // Otherwise prevent back navigation
-        return false;
+        print('WillPopScope triggered');
+        await _handleLeaveRoom();
+        return false; // Let _handleLeaveRoom handle the navigation
       },
       child: Scaffold(
         extendBodyBehindAppBar: true,
@@ -421,16 +476,8 @@ class _GameLobbyScreenState extends State<GameLobbyScreen>
                     _startCountdown();
                   } else if (room.status != 'countdown' && _isCountingDown) {
                     _cancelCountdown();
-                  } else if (room.status == 'playing') {
-                    if (mounted) {
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => GameRoomScreen(room: room),
-                        ),
-                      );
-                    }
                   }
+                  // Remove the navigation on 'playing' status
                 });
               }
 
